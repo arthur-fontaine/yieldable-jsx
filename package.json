@@ -1,0 +1,12 @@
+{
+  "name": "jsx-yield",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
