@@ -1,18 +1,24 @@
-import { defineComponent, render, h } from "../lib"
+import { defineComponent, render, h } from '../lib'
 
 const Word = defineComponent<{ word: string }>(function* ({ word }) {
-  yield* <p>{word}</p>
+  yield* <span>{word}</span>
 })
 
 const Comp = defineComponent(function* ({}, _) {
-  yield* <p>hello</p>
+  const closeP = yield* _.openTag('p', {})
 
-  const { word, setword } = yield* _.data('word', 'foo')
+  yield* <span>hello{' '}</span>
 
-  const changeWord = () => setword("world")
-  setTimeout(changeWord, 1000)
+  const { word, setword } = yield* _.state('word', 'foo')
+
+  const changeWord = () => setword('world')
+  setTimeout(changeWord, 2000)
 
   yield* <Word word={word} />
+
+  yield* closeP()
+
+  yield* <span>goodbye{' '}</span>
 })
 
-render(Comp, document.getElementById("root")!)
+render(Comp, document.getElementById('root')!)

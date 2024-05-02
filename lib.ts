@@ -6,20 +6,26 @@ export type ComponentProps = {
 
 export type NoProps = Record<string, never>
 
+const openTagSymbol = Symbol("openTag")
+const closeTagSymbol = Symbol("closeTag")
+
 export interface HelperUtil {
   (cb: () => void): void
-  data: <T, K extends string>(key: K, value: T) => Data<T, K>
+  state: <T, K extends string>(key: K, value: T) => State<T, K>
+  openTag: (tag: string, props: Record<string, any>) => Generator<[typeof openTagSymbol, { tag: typeof tag, props: typeof props }], () => Generator<[typeof closeTagSymbol, {}]>>
 }
 
 export type ComponentRenderFn<P extends ComponentProps> = (props: P, _: HelperUtil) =>
   Generator<
     | WithoutNever<JSX.Element>
-    | Data<any, string>
+    | State<any, string>
+    | ([typeof openTagSymbol, { tag: string, props: Record<string, any> }] & JSX.Element)
+    | ([typeof closeTagSymbol, {}] & JSX.Element)
   >
 
 export type YieldableElement = GeneratorValue<ReturnType<ComponentRenderFn<NoProps>>>
 
-class Data<T, K extends string> {
+class State<T, K extends string> {
   #onSet: () => void
 
   constructor(
@@ -62,27 +68,33 @@ export class Component<P extends ComponentProps = NoProps> extends Function impl
       cb()
       this.#cacheExpired = true
     }) as HelperUtil
-    helper.data = (key, value) => {
-      const cachedData = this.#cache.find((e) => e instanceof Data && e.key === key) as Data<any, any> | undefined
-      if (cachedData) {
-        return cachedData
+    helper.state = (key, value) => {
+      const cachedState = this.#cache.find((e) => e instanceof State && e.key === key) as State<any, any> | undefined
+      if (cachedState) {
+        return cachedState
       }
 
-      return new Data(key, value, () => this.#cacheExpired = true)
+      return new State(key, value, () => this.#cacheExpired = true)
+    }
+    helper.openTag = function* (tag, props) {
+      yield [openTagSymbol, { tag, props }]
+      return function* () {
+        yield [closeTagSymbol, {}]
+      }
     }
 
     if (this.#cacheExpired || this.#hasPropsChanged(props)) {
       this.#cache = this.#cache.filter((element) => {
-        if (element instanceof Data) {
-          return true // Keep data elements
+        if (element instanceof State) {
+          return true // Keep state elements
         }
         return false // Remove all other elements
       })
       for (const element of this.#generator(props, helper)) {
-        if (element instanceof Data) {
-          const cachedData = this.#cache.find((e) => e instanceof Data && e.key === element.key)
-          if (cachedData) {
-            yield cachedData
+        if (element instanceof State) {
+          const cachedState = this.#cache.find((e) => e instanceof State && e.key === element.key)
+          if (cachedState) {
+            yield cachedState
             continue
           }
         }
@@ -131,19 +143,39 @@ export const defineComponent = <P extends ComponentProps = NoProps>(fn: Componen
 
 export const render = (component: Component, container: Element) => {
   const root = document.createElement("div")
+  const rootStack: HTMLElement[] = [root]
   container.appendChild(root)
 
   const update = async () => {
     root.innerHTML = ""
     for (const element of component.render({})) {
+      if (Array.isArray(element) && element[0] === openTagSymbol) {
+        const newElement = document.createElement(element[1].tag)
+        for (const key in element[1].props) {
+          newElement.setAttribute(key, element[1].props[key])
+        }
+        rootStack[rootStack.length - 1].appendChild(newElement)
+        rootStack.push(newElement)
+        continue
+      }
+
+      if (Array.isArray(element) && element[0] === closeTagSymbol) {
+        const closedElement = rootStack.pop()
+        if (!closedElement) {
+          throw new Error("Cannot close tag")
+        }
+        rootStack[rootStack.length - 1].appendChild(closedElement)
+        continue
+      }
+
       if ('nodes' in element) {
         for (const node of element.nodes) {
-          root.appendChild(node)
+          rootStack[rootStack.length - 1].appendChild(node)
         }
         continue
       }
     }
-    setTimeout(update, 1000)
+    setTimeout(update, 0)
   }
 
   update()
