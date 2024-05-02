@@ -5,5 +5,7 @@ namespace JSX {
     type: never
     props: never
     key: never
+
+    [Symbol.iterator](): any
   }
 }

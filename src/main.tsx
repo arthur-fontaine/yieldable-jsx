@@ -1,20 +1,15 @@
 import { defineComponent, render, h } from "../lib"
 
 const Word = defineComponent<{ word: string }>(function* ({ word }) {
-  console.log("rendering Word")
-
   yield* <p>{word}</p>
 })
 
-let word = "world"
 const Comp = defineComponent(function* ({}, _) {
-  console.log("rendering Comp")
-
   yield* <p>hello</p>
 
-  const changeWord = () => _(() => {
-    word = "foo"
-  })
+  const { word, setword } = yield* _.data('word', 'foo')
+
+  const changeWord = () => setword("world")
   setTimeout(changeWord, 1000)
 
   yield* <Word word={word} />

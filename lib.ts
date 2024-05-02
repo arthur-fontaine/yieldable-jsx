@@ -8,49 +8,100 @@ export type NoProps = Record<string, never>
 
 export interface HelperUtil {
   (cb: () => void): void
+  data: <T, K extends string>(key: K, value: T) => Data<T, K>
 }
 
-export type ComponentRenderFn<P extends ComponentProps> = (props: P, _: HelperUtil) => Generator<JSX.Element>
+export type ComponentRenderFn<P extends ComponentProps> = (props: P, _: HelperUtil) =>
+  Generator<
+    | WithoutNever<JSX.Element>
+    | Data<any, string>
+  >
 
-export interface Component<P extends ComponentProps = NoProps> extends ComponentRenderFn<P> {
+export type YieldableElement = GeneratorValue<ReturnType<ComponentRenderFn<NoProps>>>
+
+class Data<T, K extends string> {
+  #onSet: () => void
+
+  constructor(
+    public key: K,
+    public value: T,
+    onSet: () => void
+  ) {
+    this.#onSet = onSet
+  }
+
+  *[Symbol.iterator]() {
+    yield this
+    return {
+      [this.key]: this.value,
+      [`set${this.key}`]: (value: T) => {
+        this.value = value
+        this.#onSet()
+      }
+    } as (
+        { [_ in K]: T } &
+        { [_ in `set${K}`]: (value: T) => void }
+      )
+  }
 }
 
+export interface Component<P extends ComponentProps = NoProps> extends ComponentRenderFn<P> { }
 export class Component<P extends ComponentProps = NoProps> extends Function implements Component<P> {
-  #render: ComponentRenderFn<P>
-  #currentProps?: P
+  #cache: YieldableElement[] = []
+  #cacheExpired = true
+  #generator: ComponentRenderFn<P>
+  #oldProps: P | undefined
 
-  cache: JSX.Element[] | undefined = undefined
-
-  constructor(render: ComponentRenderFn<P>) {
-    super('return this.render(...arguments)')
-    this.#render = render
+  constructor(generator: ComponentRenderFn<P>) {
+    super('console.warn("Do not call this function")')
+    this.#generator = generator
   }
 
   *render(props: P) {
-    if (this.cache !== undefined && !this.shouldComponentUpdate(props)) {
-      for (const element of this.cache) {
+    const helper = ((cb) => {
+      cb()
+      this.#cacheExpired = true
+    }) as HelperUtil
+    helper.data = (key, value) => {
+      const cachedData = this.#cache.find((e) => e instanceof Data && e.key === key) as Data<any, any> | undefined
+      if (cachedData) {
+        return cachedData
+      }
+
+      return new Data(key, value, () => this.#cacheExpired = true)
+    }
+
+    if (this.#cacheExpired || this.#hasPropsChanged(props)) {
+      this.#cache = this.#cache.filter((element) => {
+        if (element instanceof Data) {
+          return true // Keep data elements
+        }
+        return false // Remove all other elements
+      })
+      for (const element of this.#generator(props, helper)) {
+        if (element instanceof Data) {
+          const cachedData = this.#cache.find((e) => e instanceof Data && e.key === element.key)
+          if (cachedData) {
+            yield cachedData
+            continue
+          }
+        }
+
+        this.#cache.push(element)
         yield element
       }
+      this.#cacheExpired = false
+      this.#oldProps = props
       return
     }
 
-    this.#currentProps = props
-    this.cache = []
-    for (const element of this.#render(
-      props,
-      (cb) => { cb(); this.#resetCache() }
-    )) {
-      this.cache.push(element)
+    for (const element of this.#cache) {
       yield element
     }
   }
 
-  #resetCache = () => {
-    this.cache = undefined
-  }
-
-  shouldComponentUpdate(newProps: P): boolean {
-    const prevProps = this.#currentProps
+  #hasPropsChanged(newProps: P) {
+    const prevProps = this.#oldProps
 
     if (!prevProps) {
       return true
@@ -84,17 +135,19 @@ export const render = (component: Component, container: Element) => {
 
   const update = async () => {
     root.innerHTML = ""
-
-    for (const element of h(component, {})) {
-      for (const node of element.nodes) {
-        root.appendChild(node)
+    for (const element of component.render({})) {
+      if ('nodes' in element) {
+        for (const node of element.nodes) {
+          root.appendChild(node)
+        }
+        continue
       }
     }
-
-    setTimeout(update, 0)
+    setTimeout(update, 1000)
   }
 
   update()
+
   return update
 }
 
@@ -102,12 +155,10 @@ export function* h(
   tag: string | Component,
   props: Record<string, any>,
   ...children: any[]
-): Generator<WithoutNever<JSX.Element>> {
+): Generator<YieldableElement> {
   if (typeof tag === "function") {
-      for (const element of tag.render(props as any)) {
-        for (const node of element.nodes) {
-          yield { nodes: [node] }
-        }
+    for (const element of tag.render(props as any)) {
+      yield element
     }
     return
   }
@@ -133,10 +184,18 @@ export function* h(
     }
   }
 
-  yield { nodes: [element] }
+  yield { nodes: [element], [Symbol.iterator]: () => {} }
   return
 }
 
-type WithoutNever<T> = Omit<T, {
+// Utils
+
+type GeneratorValue<T extends Generator<any>> = T extends Generator<infer U> ? U : never
+
+type WithoutNever<T> = Prettify<Omit<T, {
   [K in keyof T]: T[K] extends never ? K : never
-}[keyof T]>
+}[keyof T]>>
+
+type Prettify<T> = {
+  [K in keyof T]: T[K];
+} & {};
